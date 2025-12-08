@@ -9,12 +9,11 @@ load_dotenv()
 
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
-chat_id = os.getenv("CHAT_ID")
-session = "fabio_session"
+session = os.getenv("SESSION_FILE")
 
 client = TelegramClient(session, api_id, api_hash)
 
-@client.on(events.NewMessage(chats=chat_id))
+@client.on(events.NewMessage())
 async def handler(event):
     chat_id = event.chat_id
     chat = await event.get_chat()
@@ -50,13 +49,13 @@ def parse_signal(message: str):
     sl = float(sl_match.group(1)) if sl_match else None
 
     # Detectar la lista de TP (pueden ser varios)
-    tp_matches = re.findall(r"\bTP\s+(\d+(\.\d+)?)", text)
-    first_tp = float(tp_matches[1][0]) if tp_matches else None
+    tp_matches = re.findall(r"\bTP\d*\s+(\d+(?:\.\d+)?)", text)
+    tp = float(tp_matches[1]) if tp_matches else None
 
     return {
-        "symbol": "XAUSD",   # siempre es XAU en tus señales
+        "symbol": "XAUUSD",   # siempre es XAU en tus señales
         "side": side,         # BUY / SELL
-        "tp": first_tp,       # primer TP
+        "tp": tp,            # segundo TP
         "sl": sl              # stop loss
     }
 
