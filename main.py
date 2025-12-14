@@ -1,8 +1,13 @@
 import os
 import re
+import unicodedata
 import MetaTrader5 as mt5
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
+
+MAGIC = 55555
+SYMBOL = "XAUUSD"
+ENABLE_BE = False
 
 # Cargar .env
 load_dotenv()
@@ -17,6 +22,7 @@ client = TelegramClient(session, api_id, api_hash)
 async def handler(event):
     chat_id = event.chat_id
     chat = await event.get_chat()
+    text = normalize_text(event.raw_text)
 
     # Algunos chats tienen title, otros first_name
     chat_name = getattr(chat, "title", None) or getattr(chat, "first_name", "Desconocido")
@@ -24,9 +30,20 @@ async def handler(event):
     print("────────────")
     print("Chat ID:", chat_id)
     print("Nombre  :", chat_name)
-    # print("Mensaje :", event.raw_text)
 
-    parsed = parse_signal(event.raw_text)
+    # --- CIERRE DE POSICIÓN ---
+    if "CLOSE" in text.upper():
+        print("📩 Señal CLOSE detectada")
+        close_bot_positions()
+        return
+    
+    # --- MOVER SL A BE ---
+    if ENABLE_BE and "TP 2 HIT" in text.upper():
+        print("Señal BE detectada")
+        move_bot_positions_to_be()
+        return
+
+    parsed = parse_signal(text)
     print("Señal recibida:", parsed)
 
     # Si falta BUY/SELL o SL/TP, ignora el mensaje
@@ -37,6 +54,9 @@ async def handler(event):
     # ENVIAR LA ORDEN A MT5
     send_order(parsed)
 
+def normalize_text(text):
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
 def parse_signal(message: str):
     text = message.upper()
 
@@ -45,15 +65,15 @@ def parse_signal(message: str):
     side = side_match.group(1) if side_match else None
 
     # Detectar SL
-    sl_match = re.search(r"\bSL\s+(\d+(\.\d+)?)", text)
+    sl_match = re.search(r"\bSL\b.*?(\d+(?:\.\d+)?)", text)
     sl = float(sl_match.group(1)) if sl_match else None
 
     # Detectar la lista de TP (pueden ser varios)
     tp_matches = re.findall(r"\bTP\d*\s+(\d+(?:\.\d+)?)", text)
-    tp = float(tp_matches[1]) if tp_matches else None
+    tp = float(tp_matches[1]) if len(tp_matches) > 1 else None
 
     return {
-        "symbol": "XAUUSD",   # siempre es XAU en tus señales
+        "symbol": SYMBOL,   # siempre es XAU en tus señales
         "side": side,         # BUY / SELL
         "tp": tp,            # segundo TP
         "sl": sl              # stop loss
@@ -90,7 +110,7 @@ def send_order(parsed):
         "sl": sl,
         "tp": tp,
         "deviation": 10,
-        "magic": 55555,
+        "magic": MAGIC,
         "comment": "telegram_signal",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
@@ -103,6 +123,61 @@ def send_order(parsed):
         print("Error al enviar orden:", result)
     else:
         print("Orden enviada:", result)
+
+def move_bot_positions_to_be():
+    positions = mt5.positions_get()
+    if not positions:
+        return
+
+    for p in positions:
+        if p.magic != MAGIC:
+            continue
+
+        entry = p.price_open
+
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": p.ticket,
+            "sl": entry,
+            "tp": p.tp,
+            "symbol": p.symbol,
+            "magic": MAGIC,
+            "comment": "move_to_be"
+        }
+
+        mt5.order_send(request)
+
+def close_bot_positions():
+    positions = mt5.positions_get()
+    if positions is None:
+        print("No se pudieron obtener posiciones.")
+        return
+
+    for p in positions:
+        if p.magic != MAGIC or p.symbol != SYMBOL:
+            continue
+
+        close_type = mt5.ORDER_TYPE_SELL if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+        price = mt5.symbol_info_tick(p.symbol).bid if close_type == mt5.ORDER_TYPE_SELL else mt5.symbol_info_tick(p.symbol).ask
+
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": p.symbol,
+            "volume": p.volume,
+            "type": close_type,
+            "position": p.ticket,
+            "price": price,
+            "deviation": 10,
+            "magic": MAGIC,
+            "comment": "telegram_close"
+        }
+
+        result = mt5.order_send(request)
+
+        if result.retcode == mt5.TRADE_RETCODE_DONE:
+            print(f"✅ Posición cerrada | ticket {p.ticket}")
+        else:
+            print(f"❌ Error cerrando ticket {p.ticket}", result)
 
 def calculate_lot(symbol, entry_price, sl_price, risk_percent=1.0, debug=False):
     acc = mt5.account_info()
@@ -134,22 +209,10 @@ def calculate_lot(symbol, entry_price, sl_price, risk_percent=1.0, debug=False):
     if stop_price_diff <= 0:
         raise ValueError("SL inválido o igual al precio de entrada.")
 
-    # === Cálculo tipo "por unidad" (equivalente a Symbol.PipValue de cTrader) ===
-    # trade_tick_value = valor monetario de UN TICK para 1 LOTE
-    # trade_tick_size  = tamaño de ese tick en precio (ej: 0.01)
-    # contract_size    = unidades por lote (ej: 1 para BTC, 100000 para EURUSD)
     value_per_price_unit_per_lot = trade_tick_value / trade_tick_size
     value_per_price_unit_per_unit = value_per_price_unit_per_lot / contract_size
-
-    # Ahora replicamos rawUnits = riskMoney / (stopPips * PipValue)
-    # pero usando stop_price_diff en **unidades de precio**:
     raw_units = risk_money / (stop_price_diff * value_per_price_unit_per_unit)
-
-    # Convertir unidades -> lotes
     lots_raw = raw_units / contract_size
-
-    # Normalizar al paso de volumen del broker
-    # Evitar problemas de punto flotante usando round con el step
     normalized_lots = round(lots_raw / volume_step) * volume_step
 
     # Respetar min/max
