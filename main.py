@@ -5,18 +5,20 @@ import MetaTrader5 as mt5
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 
-MAGIC = 55555
-SYMBOL = "XAUUSD"
-ENABLE_BE = False
-
 # Cargar .env
 load_dotenv()
 
-api_id = int(os.getenv("API_ID"))
-api_hash = os.getenv("API_HASH")
-session = os.getenv("SESSION_FILE")
+SYMBOL = os.getenv("SYMBOL")
+MAGIC = int(os.getenv("MAGIC"))
+SESSION_FILE = os.getenv("SESSION_FILE")
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+CONNECT_MT5 = os.getenv("CONNECT_MT5") == "True"
+TP_TARGET = int(os.getenv("TP_TARGET"))
+BE_AT_TP = int(os.getenv("BE_AT_TP"))
+RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
 
-client = TelegramClient(session, api_id, api_hash)
+client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
 
 @client.on(events.NewMessage())
 async def handler(event):
@@ -38,7 +40,7 @@ async def handler(event):
         return
     
     # --- MOVER SL A BE ---
-    if ENABLE_BE and "TP 2 HIT" in text.upper():
+    if BE_AT_TP > 0 and f"TP {BE_AT_TP} HIT" in text.upper():
         print("Señal BE detectada")
         move_bot_positions_to_be()
         return
@@ -52,7 +54,8 @@ async def handler(event):
         return
 
     # ENVIAR LA ORDEN A MT5
-    send_order(parsed)
+    if CONNECT_MT5:
+        send_order(parsed)
 
 def normalize_text(text):
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
@@ -70,7 +73,7 @@ def parse_signal(message: str):
 
     # Detectar la lista de TP (pueden ser varios)
     tp_matches = re.findall(r"\bTP\d*\s+(\d+(?:\.\d+)?)", text)
-    tp = float(tp_matches[1]) if len(tp_matches) > 1 else None
+    tp = float(tp_matches[TP_TARGET - 1]) if len(tp_matches) > 1 else None
 
     return {
         "symbol": SYMBOL,   # siempre es XAU en tus señales
@@ -98,7 +101,7 @@ def send_order(parsed):
 
     price = mt5.symbol_info_tick(symbol).ask if side == "BUY" else mt5.symbol_info_tick(symbol).bid
 
-    lot = calculate_lot(symbol, price, sl, risk_percent=1.0)
+    lot = calculate_lot(symbol, price, sl, risk_percent=RISK_PERCENT)
 
     # Crear orden
     request = {
@@ -234,5 +237,6 @@ async def main():
     await client.run_until_disconnected()
 
 with client:
-    init_mt5()
+    if CONNECT_MT5:
+        init_mt5()
     client.loop.run_until_complete(main())
