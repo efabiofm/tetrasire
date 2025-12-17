@@ -55,6 +55,8 @@ async def handler(event):
 
     # ENVIAR LA ORDEN A MT5
     if CONNECT_MT5:
+        # Cerrar cualquier posición que podría estar en perdida
+        close_bot_positions()
         send_order(parsed)
 
 def normalize_text(text):
@@ -76,10 +78,10 @@ def parse_signal(message: str):
     tp = float(tp_matches[TP_TARGET - 1]) if len(tp_matches) > 1 else None
 
     return {
-        "symbol": SYMBOL,   # siempre es XAU en tus señales
-        "side": side,         # BUY / SELL
-        "tp": tp,            # segundo TP
-        "sl": sl              # stop loss
+        "symbol": SYMBOL,
+        "side": side,
+        "tp": tp,
+        "sl": sl
     }
 
 def send_order(parsed):
