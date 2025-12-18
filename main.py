@@ -16,6 +16,7 @@ API_HASH = os.getenv("API_HASH")
 CONNECT_MT5 = os.getenv("CONNECT_MT5") == "True"
 TP_TARGET = int(os.getenv("TP_TARGET"))
 BE_AT_TP = int(os.getenv("BE_AT_TP"))
+HALF_SL_AT_TP = int(os.getenv("HALF_SL_AT_TP"))
 RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
 
 client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
@@ -37,6 +38,12 @@ async def handler(event):
     if "CLOSE" in text.upper():
         print("📩 Señal CLOSE detectada")
         close_bot_positions()
+        return
+    
+    # --- MOVER SL A LA MITAD ---
+    if HALF_SL_AT_TP > 0 and f"TP {HALF_SL_AT_TP} HIT" in text.upper():
+        print("Señal HALF SL detectada")
+        reduce_sl_to_half()
         return
     
     # --- MOVER SL A BE ---
@@ -148,6 +155,38 @@ def move_bot_positions_to_be():
             "symbol": p.symbol,
             "magic": MAGIC,
             "comment": "move_to_be"
+        }
+
+        mt5.order_send(request)
+
+def reduce_sl_to_half():
+    positions = mt5.positions_get()
+    if not positions:
+        return
+
+    for p in positions:
+        if p.magic != MAGIC or p.sl == 0:
+            continue
+
+        entry = p.price_open
+        sl = p.sl
+
+        # BUY
+        if p.type == mt5.POSITION_TYPE_BUY:
+            new_sl = entry + (sl - entry) / 2
+
+        # SELL
+        else:
+            new_sl = entry - (entry - sl) / 2
+
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": p.ticket,
+            "symbol": p.symbol,
+            "sl": new_sl,
+            "tp": p.tp,
+            "magic": MAGIC,
+            "comment": "reduce_sl_half"
         }
 
         mt5.order_send(request)
