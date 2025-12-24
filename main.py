@@ -25,15 +25,10 @@ client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
 @client.on(events.NewMessage(chats=CHAT_ID))
 async def handler(event):
     chat_id = event.chat_id
-    chat = await event.get_chat()
     text = normalize_text(event.raw_text)
-
-    # Algunos chats tienen title, otros first_name
-    chat_name = getattr(chat, "title", None) or getattr(chat, "first_name", "Desconocido")
 
     print("────────────")
     print("Chat ID:", chat_id)
-    print("Nombre  :", chat_name)
 
     # --- CIERRE DE POSICIÓN ---
     if "CLOSE" in text.upper():
