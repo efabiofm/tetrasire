@@ -18,10 +18,11 @@ TP_TARGET = int(os.getenv("TP_TARGET"))
 BE_AT_TP = int(os.getenv("BE_AT_TP"))
 HALF_SL_AT_TP = int(os.getenv("HALF_SL_AT_TP"))
 RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
+CHAT_ID = int(os.getenv("CHAT_ID"))
 
 client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
 
-@client.on(events.NewMessage())
+@client.on(events.NewMessage(chats=CHAT_ID))
 async def handler(event):
     chat_id = event.chat_id
     chat = await event.get_chat()
