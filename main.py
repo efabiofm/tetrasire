@@ -27,42 +27,44 @@ client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
 # ───────────────────────────────
 @client.on(events.NewMessage(chats=CHAT_ID))
 async def handler(event):
-    print("────────────")
+    signal_time_local = event.date.astimezone()
+
+    print("──────────────────────────────────────")
+    print(f"Señal #{event.id} @ {signal_time_local}")
 
     text = normalize_text(event.raw_text)
 
-    # 1️⃣ Mensajes de DELETE (reply)
+    # Mensajes de management
     if event.is_reply and ("delete" in text or "cancel" in text):
         replied = await event.get_reply_message()
-        print(f"Delete pedido para señal {replied.id}")
+        print(f"> Delete para señal #{replied.id}")
         if CONNECT_MT5:
             delete_pending_by_signal_id(replied.id)
         return
     
-    # MOVER SL A BE (reply + "sl move")
     if "sl move" in text and event.is_reply:
         replied = await event.get_reply_message()
-        print(f"Move SL to BE pedido para señal {replied.id}")
+        print(f"> Break-even para señal #{replied.id}")
         if CONNECT_MT5:
             move_sl_to_be_by_signal_id(replied.id)
         return
     
-    # CERRAR POSICIÓN (reply + "closed")
     if "closed" in text and event.is_reply:
         replied = await event.get_reply_message()
-        print(f"Close pedido para señal {replied.id}")
+        print(f"> Close para señal #{replied.id}")
         if CONNECT_MT5:
             close_position_by_signal_id(replied.id)
         return
 
-    # 2️⃣ Señales normales
+    # Señales normales
     parsed = parse_signal(text)
-    print("Señal recibida:", parsed)
 
     required = ["side", "entry", "sl", "tp"]
     if any(parsed[k] is None for k in required):
-        print("Mensaje no válido.")
+        print("> Mensaje no válido.")
         return
+
+    print(">", parsed)
 
     if CONNECT_MT5:
         send_order(parsed, signal_id=event.id)
@@ -214,7 +216,7 @@ def close_position_by_signal_id(signal_id):
             print(f"❌ Error cerrando {p.ticket}", result)
 
 # ───────────────────────────────
-# Mover SL to BE pending por signal_id
+# Mover SL to BE por signal_id
 # ───────────────────────────────
 def move_sl_to_be_by_signal_id(signal_id):
     positions = mt5.positions_get()
@@ -247,7 +249,7 @@ def move_sl_to_be_by_signal_id(signal_id):
             print(f"❌ Error moviendo SL {p.ticket}", result)
 
 # ───────────────────────────────
-# Lotaje
+# Calculo de Lotaje
 # ───────────────────────────────
 def calculate_lot(symbol, entry_price, sl_price, risk_percent):
     acc = mt5.account_info()
@@ -275,7 +277,7 @@ def init_mt5():
 
 async def main():
     await client.start()
-    print("Bot escuchando…")
+    print("Bot escuchando...")
     await client.run_until_disconnected()
 
 with client:
