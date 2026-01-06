@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import unicodedata
 import MetaTrader5 as mt5
 from dotenv import load_dotenv
@@ -119,6 +120,8 @@ def send_order(parsed, signal_id):
     if lot <= 0:
         print("Lote inválido.")
         return
+    
+    expiration_time = int(time.time()) + 3600 # 1 hora
 
     request = {
         "action": action,
@@ -133,6 +136,7 @@ def send_order(parsed, signal_id):
         "comment": f"signal:{signal_id}",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
+        "expiration": expiration_time,
     }
 
     result = mt5.order_send(request)
