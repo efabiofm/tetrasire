@@ -5,7 +5,9 @@ import MetaTrader5 as mt5
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 
-# Cargar .env
+# ───────────────────────────────
+# Config
+# ───────────────────────────────
 load_dotenv()
 
 SYMBOL = os.getenv("SYMBOL")
@@ -19,73 +21,107 @@ CHAT_ID = int(os.getenv("CHAT_ID"))
 
 client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
 
+# ───────────────────────────────
+# Telegram handler
+# ───────────────────────────────
 @client.on(events.NewMessage(chats=CHAT_ID))
 async def handler(event):
     print("────────────")
 
     text = normalize_text(event.raw_text)
-    parsed = parse_signal(text)
 
+    # 1️⃣ Mensajes de DELETE (reply)
+    if event.is_reply and ("delete" in text or "cancel" in text):
+        replied = await event.get_reply_message()
+        print(f"Delete pedido para señal {replied.id}")
+        if CONNECT_MT5:
+            delete_pending_by_signal_id(replied.id)
+        return
+    
+    # MOVER SL A BE (reply + "sl move")
+    if "sl move" in text and event.is_reply:
+        replied = await event.get_reply_message()
+        print(f"Move SL to BE pedido para señal {replied.id}")
+        if CONNECT_MT5:
+            move_sl_to_be_by_signal_id(replied.id)
+        return
+    
+    # CERRAR POSICIÓN (reply + "closed")
+    if "closed" in text and event.is_reply:
+        replied = await event.get_reply_message()
+        print(f"Close pedido para señal {replied.id}")
+        if CONNECT_MT5:
+            close_position_by_signal_id(replied.id)
+        return
+
+    # 2️⃣ Señales normales
+    parsed = parse_signal(text)
     print("Señal recibida:", parsed)
 
-    # Si falta BUY/SELL o SL/TP, ignora el mensaje
-    if not parsed["side"] or not parsed["sl"] or not parsed["tp"]:
+    required = ["side", "entry", "sl", "tp"]
+    if any(parsed[k] is None for k in required):
         print("Mensaje no válido.")
         return
 
-    # ENVIAR LA ORDEN A MT5
     if CONNECT_MT5:
-        send_order(parsed)
+        send_order(parsed, signal_id=event.id)
 
+# ───────────────────────────────
+# Parsing
+# ───────────────────────────────
 def normalize_text(text):
-    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    return text.lower()
 
 def parse_signal(message: str):
-    text = message.upper()
+    text = message.lower()
 
-    # Detectar BUY o SELL
-    side_match = re.search(r"\b(BUY|SELL)\b", text)
-    side = side_match.group(1) if side_match else None
+    side = "BUY" if " buy" in text else "SELL" if " sell" in text else None
+    order_type = "LIMIT" if "limit" in text else "MARKET"
 
-    # Detectar SL
-    sl_match = re.search(r"\bSL\b.*?(\d+(?:\.\d+)?)", text)
-    sl = float(sl_match.group(1)) if sl_match else None
-
-    # Detectar la lista de TP (pueden ser varios)
-    tp_matches = re.findall(r"\bTP\d*\s+(\d+(?:\.\d+)?)", text)
-    tp = float(tp_matches[TP_TARGET - 1]) if len(tp_matches) > 1 else None
+    entry_match = re.search(r"@\s*(\d+(?:\.\d+)?)", text)
+    sl_match = re.search(r"sl\s*@?\s*(\d+(?:\.\d+)?)", text)
+    tp_match = re.search(r"tp\s*@?\s*(\d+(?:\.\d+)?)", text)
 
     return {
         "symbol": SYMBOL,
         "side": side,
-        "tp": tp,
-        "sl": sl
+        "order_type": order_type,
+        "entry": float(entry_match.group(1)) if entry_match else None,
+        "sl": float(sl_match.group(1)) if sl_match else None,
+        "tp": float(tp_match.group(1)) if tp_match else None,
     }
 
-def send_order(parsed):
+# ───────────────────────────────
+# Envío de órdenes
+# ───────────────────────────────
+def send_order(parsed, signal_id):
     symbol = parsed["symbol"]
     side = parsed["side"]
     sl = parsed["sl"]
     tp = parsed["tp"]
+    entry = parsed["entry"]
+    kind = parsed["order_type"]
 
-    # BUY = ORDER_TYPE_BUY, SELL = ORDER_TYPE_SELL
-    order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
+    mt5.symbol_select(symbol, True)
+    tick = mt5.symbol_info_tick(symbol)
 
-    # Precios actuales del símbolo
-    symbol_info = mt5.symbol_info(symbol)
-    if symbol_info is None:
-        raise RuntimeError(f"Símbolo no encontrado: {symbol}")
+    if kind == "MARKET":
+        action = mt5.TRADE_ACTION_DEAL
+        order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
+        price = tick.ask if side == "BUY" else tick.bid
+    else:
+        action = mt5.TRADE_ACTION_PENDING
+        order_type = mt5.ORDER_TYPE_BUY_LIMIT if side == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
+        price = entry
 
-    if not symbol_info.visible:
-        mt5.symbol_select(symbol, True)
+    lot = calculate_lot(symbol, price, sl, RISK_PERCENT)
+    if lot <= 0:
+        print("Lote inválido.")
+        return
 
-    price = mt5.symbol_info_tick(symbol).ask if side == "BUY" else mt5.symbol_info_tick(symbol).bid
-
-    lot = calculate_lot(symbol, price, sl, risk_percent=RISK_PERCENT)
-
-    # Crear orden
     request = {
-        "action": mt5.TRADE_ACTION_DEAL,
+        "action": action,
         "symbol": symbol,
         "volume": lot,
         "type": order_type,
@@ -94,54 +130,66 @@ def send_order(parsed):
         "tp": tp,
         "deviation": 10,
         "magic": MAGIC,
-        "comment": "telegram_signal",
+        "comment": f"signal:{signal_id}",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
 
-    # Enviar orden
     result = mt5.order_send(request)
+    print("Resultado:", result)
 
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        print("Error al enviar orden:", result)
-    else:
-        print("Orden enviada:", result)
+# ───────────────────────────────
+# Delete pending por signal_id
+# ───────────────────────────────
+def delete_pending_by_signal_id(signal_id):
+    orders = mt5.orders_get()
+    if not orders:
+        print("No hay órdenes pendientes.")
+        return
 
-def move_bot_positions_to_be():
+    for o in orders:
+        if o.magic != MAGIC:
+            continue
+        if o.comment != f"signal:{signal_id}":
+            continue
+
+        request = {
+            "action": mt5.TRADE_ACTION_REMOVE,
+            "order": o.ticket,
+            "symbol": o.symbol,
+            "magic": MAGIC,
+            "comment": "delete_by_reply"
+        }
+
+        result = mt5.order_send(request)
+        if result.retcode == mt5.TRADE_RETCODE_DONE:
+            print(f"✅ Pending eliminada | ticket {o.ticket}")
+        else:
+            print(f"❌ Error eliminando {o.ticket}", result)
+
+# ───────────────────────────────
+# Close pending por signal_id
+# ───────────────────────────────
+def close_position_by_signal_id(signal_id):
     positions = mt5.positions_get()
     if not positions:
+        print("No hay posiciones abiertas.")
         return
 
     for p in positions:
         if p.magic != MAGIC:
             continue
-
-        entry = p.price_open
-
-        request = {
-            "action": mt5.TRADE_ACTION_SLTP,
-            "position": p.ticket,
-            "sl": entry,
-            "tp": p.tp,
-            "symbol": p.symbol,
-            "magic": MAGIC,
-            "comment": "move_to_be"
-        }
-
-        mt5.order_send(request)
-
-def close_bot_positions():
-    positions = mt5.positions_get()
-    if positions is None:
-        print("No se pudieron obtener posiciones.")
-        return
-
-    for p in positions:
-        if p.magic != MAGIC or p.symbol != SYMBOL:
+        if p.comment != f"signal:{signal_id}":
             continue
 
-        close_type = mt5.ORDER_TYPE_SELL if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
-        price = mt5.symbol_info_tick(p.symbol).bid if close_type == mt5.ORDER_TYPE_SELL else mt5.symbol_info_tick(p.symbol).ask
+        close_type = (
+            mt5.ORDER_TYPE_SELL
+            if p.type == mt5.POSITION_TYPE_BUY
+            else mt5.ORDER_TYPE_BUY
+        )
+
+        tick = mt5.symbol_info_tick(p.symbol)
+        price = tick.bid if close_type == mt5.ORDER_TYPE_SELL else tick.ask
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -152,68 +200,78 @@ def close_bot_positions():
             "price": price,
             "deviation": 10,
             "magic": MAGIC,
-            "comment": "telegram_close"
+            "comment": "close_by_reply"
         }
 
         result = mt5.order_send(request)
-
         if result.retcode == mt5.TRADE_RETCODE_DONE:
             print(f"✅ Posición cerrada | ticket {p.ticket}")
         else:
-            print(f"❌ Error cerrando ticket {p.ticket}", result)
+            print(f"❌ Error cerrando {p.ticket}", result)
 
-def calculate_lot(symbol, entry_price, sl_price, risk_percent=1.0, debug=False):
+# ───────────────────────────────
+# Mover SL to BE pending por signal_id
+# ───────────────────────────────
+def move_sl_to_be_by_signal_id(signal_id):
+    positions = mt5.positions_get()
+    if not positions:
+        print("No hay posiciones abiertas.")
+        return
+
+    for p in positions:
+        if p.magic != MAGIC:
+            continue
+        if p.comment != f"signal:{signal_id}":
+            continue
+
+        entry = p.price_open
+
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": p.ticket,
+            "symbol": p.symbol,
+            "sl": entry,
+            "tp": p.tp,
+            "magic": MAGIC,
+            "comment": "move_sl_to_be"
+        }
+
+        result = mt5.order_send(request)
+        if result.retcode == mt5.TRADE_RETCODE_DONE:
+            print(f"✅ SL movido a BE | ticket {p.ticket}")
+        else:
+            print(f"❌ Error moviendo SL {p.ticket}", result)
+
+# ───────────────────────────────
+# Lotaje
+# ───────────────────────────────
+def calculate_lot(symbol, entry_price, sl_price, risk_percent):
     acc = mt5.account_info()
-    if acc is None:
-        raise RuntimeError("No hay conexión a la cuenta (account_info() devolvió None).")
-
-    balance = acc.balance
-    risk_money = balance * (risk_percent / 100.0)
-
     sym = mt5.symbol_info(symbol)
-    if sym is None:
-        raise RuntimeError(f"Símbolo {symbol} no encontrado.")
 
-    # propiedades del símbolo
-    trade_tick_value = getattr(sym, "trade_tick_value", None)
-    trade_tick_size = getattr(sym, "trade_tick_size", None)
-    contract_size = getattr(sym, "trade_contract_size", None)  # unidades por lote
-    point = getattr(sym, "point", None)
+    risk_money = acc.balance * (risk_percent / 100.0)
+    stop_diff = abs(entry_price - sl_price)
 
-    volume_step = getattr(sym, "volume_step", None)
-    volume_min = getattr(sym, "volume_min", None)
-    volume_max = getattr(sym, "volume_max", None)
+    value_per_price = sym.trade_tick_value / sym.trade_tick_size
+    units = risk_money / (stop_diff * (value_per_price / sym.trade_contract_size))
+    lots = units / sym.trade_contract_size
 
-    if None in (trade_tick_value, trade_tick_size, contract_size, point, volume_step, volume_min, volume_max):
-        raise RuntimeError("El símbolo no provee todos los parámetros necesarios.")
+    lots = round(lots / sym.volume_step) * sym.volume_step
+    if lots < sym.volume_min:
+        return 0.0
+    return min(lots, sym.volume_max)
 
-    # Distancia SL en precio (misma unidad que entry_price/sl_price)
-    stop_price_diff = abs(entry_price - sl_price)
-    if stop_price_diff <= 0:
-        raise ValueError("SL inválido o igual al precio de entrada.")
-
-    value_per_price_unit_per_lot = trade_tick_value / trade_tick_size
-    value_per_price_unit_per_unit = value_per_price_unit_per_lot / contract_size
-    raw_units = risk_money / (stop_price_diff * value_per_price_unit_per_unit)
-    lots_raw = raw_units / contract_size
-    normalized_lots = round(lots_raw / volume_step) * volume_step
-
-    # Respetar min/max
-    if normalized_lots < volume_min:
-        normalized_lots = 0.0  # opcional: devolver 0 si menor que min
-    if normalized_lots > volume_max:
-        normalized_lots = volume_max
-
-    return normalized_lots
-
+# ───────────────────────────────
+# Init
+# ───────────────────────────────
 def init_mt5():
     if not mt5.initialize():
-        raise RuntimeError(f"MT5 no pudo inicializarse: {mt5.last_error()}")
+        raise RuntimeError(mt5.last_error())
     print("MT5 conectado.")
 
 async def main():
     await client.start()
-    print("Bot conectado y escuchando mensajes...")
+    print("Bot escuchando…")
     await client.run_until_disconnected()
 
 with client:
