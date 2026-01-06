@@ -82,7 +82,7 @@ def parse_signal(message: str):
     side = "BUY" if " buy" in text else "SELL" if " sell" in text else None
     order_type = "LIMIT" if "limit" in text else "MARKET"
 
-    entry_match = re.search(r"@\s*(\d+(?:\.\d+)?)", text)
+    entry_match = re.search(r"(?:@)?\s*(\d+(?:\.\d+)?)", text)
     sl_match = re.search(r"sl\s*@?\s*(\d+(?:\.\d+)?)", text)
     tp_match = re.search(r"tp\s*@?\s*(\d+(?:\.\d+)?)", text)
 
@@ -206,7 +206,8 @@ def close_position_by_signal_id(signal_id):
             "price": price,
             "deviation": 10,
             "magic": MAGIC,
-            "comment": "close_by_reply"
+            "comment": "close_by_reply",
+            "type_filling": mt5.ORDER_FILLING_IOC,
         }
 
         result = mt5.order_send(request)
