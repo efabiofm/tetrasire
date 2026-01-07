@@ -50,11 +50,13 @@ async def handler(event):
             move_sl_to_be_by_signal_id(replied.id)
         return
     
-    if "closed" in text and event.is_reply:
+    if "close" in text and event.is_reply:
         replied = await event.get_reply_message()
         print(f"> Close para señal #{replied.id}")
         if CONNECT_MT5:
             close_position_by_signal_id(replied.id)
+            # A veces close se refiere a órdenes pendientes
+            delete_pending_by_signal_id(replied.id)
         return
 
     # Señales normales
