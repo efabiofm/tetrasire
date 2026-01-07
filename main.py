@@ -18,14 +18,15 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 CONNECT_MT5 = os.getenv("CONNECT_MT5") == "True"
 RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
-CHAT_ID = int(os.getenv("CHAT_ID"))
+CHAT_ID = os.getenv("CHAT_ID")
 
 client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
+chats = int(CHAT_ID) if CHAT_ID.lstrip("-").isdigit() else CHAT_ID
 
 # ───────────────────────────────
 # Telegram handler
 # ───────────────────────────────
-@client.on(events.NewMessage(chats=CHAT_ID))
+@client.on(events.NewMessage(chats=chats))
 async def handler(event):
     signal_time_local = event.date.astimezone()
 
