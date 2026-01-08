@@ -15,6 +15,7 @@ API_HASH = os.getenv("API_HASH")
 API_ID = int(os.getenv("API_ID"))
 CHAT_ID = os.getenv("CHAT_ID")
 CONNECT_MT5 = os.getenv("CONNECT_MT5") == "True"
+LIMIT_BUFFER = float(os.getenv("LIMIT_BUFFER"))
 LIMIT_ONLY = os.getenv("LIMIT_ONLY") == "True"
 MAGIC = int(os.getenv("MAGIC"))
 RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
@@ -115,8 +116,12 @@ def send_order(parsed, signal_id):
 
     if LIMIT_ONLY or kind == "LIMIT":
         action = mt5.TRADE_ACTION_PENDING
-        order_type = mt5.ORDER_TYPE_BUY_LIMIT if side == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
-        price = entry
+        if side == "BUY":
+            price = entry + LIMIT_BUFFER
+            order_type = mt5.ORDER_TYPE_BUY_LIMIT
+        else:
+            order_type = mt5.ORDER_TYPE_SELL_LIMIT
+            price = entry - LIMIT_BUFFER
     else:
         action = mt5.TRADE_ACTION_DEAL
         order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
@@ -219,11 +224,13 @@ def close_position_by_signal_id(signal_id):
             print(f"✅ Posición cerrada | ticket {p.ticket}")
         else:
             print(f"❌ Error cerrando {p.ticket}", result)
+            # Medida preventiva por si reducir el SL falla
+            close_position_by_signal_id(signal_id)
 
 # ───────────────────────────────
-# Mover SL a la mitad
+# Mover SL a un factor de riesgo
 # ───────────────────────────────
-def reduce_sl_to_half_by_signal_id(signal_id):
+def reduce_sl_by_factor_by_signal_id(signal_id, factor):
     positions = mt5.positions_get()
     if not positions:
         print("No hay posiciones abiertas.")
@@ -240,11 +247,11 @@ def reduce_sl_to_half_by_signal_id(signal_id):
 
         # BUY
         if p.type == mt5.POSITION_TYPE_BUY:
-            new_sl = entry + (sl - entry) / 2
+            new_sl = entry + (sl - entry) * factor
 
         # SELL
         else:
-            new_sl = entry - (entry - sl) / 2
+            new_sl = entry - (entry - sl) * factor
 
         request = {
             "action": mt5.TRADE_ACTION_SLTP,
@@ -253,7 +260,7 @@ def reduce_sl_to_half_by_signal_id(signal_id):
             "sl": new_sl,
             "tp": p.tp,
             "magic": MAGIC,
-            "comment": "reduce_sl_half"
+            "comment": f"reduce_sl_{factor}"
         }
 
         result = mt5.order_send(request)
@@ -294,8 +301,8 @@ def move_sl_to_be_by_signal_id(signal_id):
             print(f"✅ SL movido a BE | ticket {p.ticket}")
         else:
             print(f"❌ Error moviendo SL {p.ticket}", result)
-            # Medida preventiva en caso de el BE falle
-            reduce_sl_to_half_by_signal_id(signal_id)
+            # Medida preventiva por si el BE falla
+            reduce_sl_by_factor_by_signal_id(signal_id, 0.2)
 
 # ───────────────────────────────
 # Calculo de Lotaje
