@@ -17,7 +17,7 @@ SESSION_FILE = os.getenv("SESSION_FILE")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 CONNECT_MT5 = os.getenv("CONNECT_MT5") == "True"
-LIMIT_ONLY = os.getenv("CONNECT_MT5") == "True"
+LIMIT_ONLY = os.getenv("LIMIT_ONLY") == "True"
 RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
 CHAT_ID = os.getenv("CHAT_ID")
 
