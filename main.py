@@ -11,15 +11,15 @@ from telethon import TelegramClient, events
 # ───────────────────────────────
 load_dotenv()
 
-SYMBOL = os.getenv("SYMBOL")
-MAGIC = int(os.getenv("MAGIC"))
-SESSION_FILE = os.getenv("SESSION_FILE")
-API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
+API_ID = int(os.getenv("API_ID"))
+CHAT_ID = os.getenv("CHAT_ID")
 CONNECT_MT5 = os.getenv("CONNECT_MT5") == "True"
 LIMIT_ONLY = os.getenv("LIMIT_ONLY") == "True"
+MAGIC = int(os.getenv("MAGIC"))
 RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
-CHAT_ID = os.getenv("CHAT_ID")
+SESSION_FILE = os.getenv("SESSION_FILE")
+SYMBOL = os.getenv("SYMBOL")
 
 client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
 chats = int(CHAT_ID) if CHAT_ID.lstrip("-").isdigit() else CHAT_ID
@@ -221,6 +221,48 @@ def close_position_by_signal_id(signal_id):
             print(f"❌ Error cerrando {p.ticket}", result)
 
 # ───────────────────────────────
+# Mover SL a la mitad
+# ───────────────────────────────
+def reduce_sl_to_half_by_signal_id(signal_id):
+    positions = mt5.positions_get()
+    if not positions:
+        print("No hay posiciones abiertas.")
+        return
+
+    for p in positions:
+        if p.magic != MAGIC:
+            continue
+        if p.comment != f"signal:{signal_id}":
+            continue
+
+        entry = p.price_open
+        sl = p.sl
+
+        # BUY
+        if p.type == mt5.POSITION_TYPE_BUY:
+            new_sl = entry + (sl - entry) / 2
+
+        # SELL
+        else:
+            new_sl = entry - (entry - sl) / 2
+
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": p.ticket,
+            "symbol": p.symbol,
+            "sl": new_sl,
+            "tp": p.tp,
+            "magic": MAGIC,
+            "comment": "reduce_sl_half"
+        }
+
+        result = mt5.order_send(request)
+        if result.retcode == mt5.TRADE_RETCODE_DONE:
+            print(f"✅ SL movido a la mitad | ticket {p.ticket}")
+        else:
+            print(f"❌ Error moviendo SL {p.ticket}", result)
+
+# ───────────────────────────────
 # Mover SL to BE por signal_id
 # ───────────────────────────────
 def move_sl_to_be_by_signal_id(signal_id):
@@ -252,8 +294,8 @@ def move_sl_to_be_by_signal_id(signal_id):
             print(f"✅ SL movido a BE | ticket {p.ticket}")
         else:
             print(f"❌ Error moviendo SL {p.ticket}", result)
-            # Cierre forzoso para evitar perder el trade
-            close_position_by_signal_id(signal_id)
+            # Medida preventiva en caso de el BE falle
+            reduce_sl_to_half_by_signal_id(signal_id)
 
 # ───────────────────────────────
 # Calculo de Lotaje
