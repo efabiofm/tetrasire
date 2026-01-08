@@ -17,6 +17,7 @@ SESSION_FILE = os.getenv("SESSION_FILE")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 CONNECT_MT5 = os.getenv("CONNECT_MT5") == "True"
+LIMIT_ONLY = os.getenv("CONNECT_MT5") == "True"
 RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
 CHAT_ID = os.getenv("CHAT_ID")
 
@@ -112,14 +113,14 @@ def send_order(parsed, signal_id):
     mt5.symbol_select(symbol, True)
     tick = mt5.symbol_info_tick(symbol)
 
-    if kind == "MARKET":
-        action = mt5.TRADE_ACTION_DEAL
-        order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
-        price = tick.ask if side == "BUY" else tick.bid
-    else:
+    if LIMIT_ONLY or kind == "LIMIT":
         action = mt5.TRADE_ACTION_PENDING
         order_type = mt5.ORDER_TYPE_BUY_LIMIT if side == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
         price = entry
+    else:
+        action = mt5.TRADE_ACTION_DEAL
+        order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
+        price = tick.ask if side == "BUY" else tick.bid
 
     lot = calculate_lot(symbol, price, sl, RISK_PERCENT)
     if lot <= 0:
@@ -251,6 +252,8 @@ def move_sl_to_be_by_signal_id(signal_id):
             print(f"✅ SL movido a BE | ticket {p.ticket}")
         else:
             print(f"❌ Error moviendo SL {p.ticket}", result)
+            # Cierre forzoso para evitar perder el trade
+            close_position_by_signal_id(signal_id)
 
 # ───────────────────────────────
 # Calculo de Lotaje
