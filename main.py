@@ -50,7 +50,7 @@ async def handler(event):
         replied = await event.get_reply_message()
         print(f"> Break-even para señal #{replied.id}")
         if CONNECT_MT5:
-            move_sl_to_be_by_signal_id(replied.id)
+            move_sl_to_original_entry(replied)
         return
     
     if "close" in text and event.is_reply:
@@ -354,6 +354,43 @@ def move_sl_to_be_by_signal_id(signal_id):
             print(f"❌ Error moviendo SL {p.ticket}", result)
             # Medida preventiva por si el BE falla
             reduce_sl_by_factor_by_signal_id(signal_id, 0.2)
+
+# ───────────────────────────────
+# Mover SL to original entry
+# ───────────────────────────────
+def move_sl_to_original_entry(signal):
+    positions = mt5.positions_get()
+    if not positions:
+        print("No hay posiciones abiertas.")
+        return
+
+    for p in positions:
+        if p.magic != MAGIC:
+            continue
+        if p.comment != f"signal:{signal.id}":
+            continue
+        
+        text = normalize_text(signal.raw_text)
+        parsed = parse_signal(text)
+        entry = parsed["entry"]
+
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": p.ticket,
+            "symbol": p.symbol,
+            "sl": entry,
+            "tp": p.tp,
+            "magic": MAGIC,
+            "comment": "move_sl_to_original_entry"
+        }
+
+        result = mt5.order_send(request)
+        if result.retcode == mt5.TRADE_RETCODE_DONE:
+            print(f"✅ SL movido a entrada original | ticket {p.ticket}")
+        else:
+            print(f"❌ Error moviendo SL {p.ticket}", result)
+            # Medida preventiva por si no se pudo mover el SL
+            reduce_sl_by_factor_by_signal_id(signal.id, 0.2)
 
 # ───────────────────────────────
 # Calculo de Lotaje
