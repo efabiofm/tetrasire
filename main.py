@@ -18,6 +18,7 @@ CONNECT_MT5 = os.getenv("CONNECT_MT5") == "True"
 LIMIT_BUFFER = float(os.getenv("LIMIT_BUFFER"))
 LIMIT_ONLY = os.getenv("LIMIT_ONLY") == "True"
 MAGIC = int(os.getenv("MAGIC"))
+MARKET_BUFFER = float(os.getenv("MARKET_BUFFER"))
 RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
 SESSION_FILE = os.getenv("SESSION_FILE")
 SYMBOL = os.getenv("SYMBOL")
@@ -72,7 +73,10 @@ async def handler(event):
     print(">", parsed)
 
     if CONNECT_MT5:
-        send_order(parsed, signal_id=event.id)
+        if LIMIT_ONLY:
+            send_order_limit_only(parsed, signal_id=event.id)
+        else:
+            send_order(parsed, signal_id=event.id)
 
 # ───────────────────────────────
 # Parsing
@@ -114,7 +118,7 @@ def send_order(parsed, signal_id):
     mt5.symbol_select(symbol, True)
     tick = mt5.symbol_info_tick(symbol)
 
-    if LIMIT_ONLY or kind == "LIMIT":
+    if kind == "LIMIT":
         action = mt5.TRADE_ACTION_PENDING
         if side == "BUY":
             price = entry + LIMIT_BUFFER
@@ -126,6 +130,53 @@ def send_order(parsed, signal_id):
         action = mt5.TRADE_ACTION_DEAL
         order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
         price = tick.ask if side == "BUY" else tick.bid
+
+    lot = calculate_lot(symbol, price, sl, RISK_PERCENT)
+    if lot <= 0:
+        print("Lote inválido.")
+        return
+    
+    expiration_time = int(time.time()) + 3600 # 1 hora
+
+    request = {
+        "action": action,
+        "symbol": symbol,
+        "volume": lot,
+        "type": order_type,
+        "price": price,
+        "sl": sl,
+        "tp": tp,
+        "deviation": 10,
+        "magic": MAGIC,
+        "comment": f"signal:{signal_id}",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+        "expiration": expiration_time,
+    }
+
+    result = mt5.order_send(request)
+    print("Resultado:", result)
+
+# ───────────────────────────────
+# Envío de órdenes (Limit Only)
+# ───────────────────────────────
+def send_order_limit_only(parsed, signal_id):
+    symbol = parsed["symbol"]
+    side = parsed["side"]
+    sl = parsed["sl"]
+    tp = parsed["tp"]
+    entry = parsed["entry"]
+    kind = parsed["order_type"]
+
+    mt5.symbol_select(symbol, True)
+    action = mt5.TRADE_ACTION_PENDING
+    order_type = mt5.ORDER_TYPE_BUY_LIMIT if side == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
+    buffer = LIMIT_BUFFER if kind == "LIMIT" else MARKET_BUFFER
+
+    if side == "BUY":
+        price = entry + buffer
+    else:
+        price = entry - buffer
 
     lot = calculate_lot(symbol, price, sl, RISK_PERCENT)
     if lot <= 0:
