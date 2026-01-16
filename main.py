@@ -137,13 +137,21 @@ def parse_signal(message: str):
     sl_match = re.search(r"sl\s*@?\s*(\d+(?:\.\d+)?)", text)
     tp_match = re.search(r"tp\s*@?\s*(\d+(?:\.\d+)?)", text)
 
+    entry = float(entry_match.group(1)) if entry_match else None
+    sl = float(sl_match.group(1)) if sl_match else None
+    tp = float(tp_match.group(1)) if tp_match else None
+
+    # Corrección defensiva del SL
+    if side and entry and sl:
+        sl = fix_sl_if_invalid(entry, sl, side)
+
     return {
         "symbol": SYMBOL,
         "side": side,
         "order_type": order_type,
-        "entry": float(entry_match.group(1)) if entry_match else None,
-        "sl": float(sl_match.group(1)) if sl_match else None,
-        "tp": float(tp_match.group(1)) if tp_match else None,
+        "entry": entry,
+        "sl": sl,
+        "tp": tp,
     }
 
 # ───────────────────────────────
@@ -397,7 +405,7 @@ def move_sl_to_be_by_signal_id(signal_id):
             print(f"❌ Error moviendo SL", result)
             if result.recode != mt5.TRADE_RETCODE_NO_CHANGES:
                 # Medida preventiva por si el BE falla
-                reduce_sl_by_factor_by_signal_id(signal_id, 0.3)
+                reduce_sl_by_factor_by_signal_id(signal_id, 0.2)
 
 # ───────────────────────────────
 # Mover SL to original entry
@@ -439,7 +447,7 @@ def move_sl_to_original_entry(signal):
             print(f"❌ Error moviendo SL", result)
             if result.recode != mt5.TRADE_RETCODE_NO_CHANGES:
                 # Medida preventiva por si no se pudo mover el SL
-                reduce_sl_by_factor_by_signal_id(signal.id, 0.3)
+                reduce_sl_by_factor_by_signal_id(signal.id, 0.2)
 
 # ───────────────────────────────
 # Calculo de Lotaje
@@ -459,6 +467,35 @@ def calculate_lot(symbol, entry_price, sl_price, risk_percent):
     if lots < sym.volume_min:
         return 0.0
     return min(lots, sym.volume_max)
+
+# ───────────────────────────────
+# Corrige SL inválidos
+# ───────────────────────────────
+def fix_sl_if_invalid(entry: float, sl: float, side: str, max_dist: float = 100.0):
+    def is_sl_ok(e, s, sd):
+        if sd == "BUY":
+            return s < e and abs(e - s) <= max_dist
+        return s > e and abs(e - s) <= max_dist
+
+    # Si ya es válido (lado correcto + distancia razonable), no tocar
+    if is_sl_ok(entry, sl, side):
+        return sl
+
+    # Últimos 2 dígitos del SL (error humano típico)
+    sl_digits = int(round(sl)) % 100
+
+    base = int(entry // 100) * 100
+
+    candidates = []
+    for i in range(-3, 4):
+        candidates.append(base + i * 100 + sl_digits)
+
+    # Filtrar candidatos válidos y escoger el más cercano al entry
+    valid = [c for c in candidates if is_sl_ok(entry, c, side)]
+    if not valid:
+        return None
+
+    return min(valid, key=lambda c: abs(entry - c))
 
 # ───────────────────────────────
 # Init
