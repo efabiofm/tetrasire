@@ -61,6 +61,48 @@ async def handler(event):
             # A veces close se refiere a órdenes pendientes
             delete_pending_by_signal_id(replied.id)
         return
+    
+    # Verifica si la señal vino sin SL/TP pero luego en un reply se especificó
+    if event.is_reply:
+        replied = await event.get_reply_message()
+
+        base_text = normalize_text(replied.raw_text)
+        reply_text = normalize_text(event.raw_text)
+
+        base_parsed = parse_signal(base_text)
+        reply_parsed = parse_signal(reply_text)
+
+        # base tiene side + entry, pero no sl/tp
+        base_ok = base_parsed["side"] and base_parsed["entry"] and not base_parsed["sl"] and not base_parsed["tp"]
+
+        # reply tiene sl y tp
+        reply_ok = reply_parsed["sl"] and reply_parsed["tp"]
+
+        if base_ok and reply_ok:
+            # verificar diferencia de tiempo
+            t1 = replied.date
+            t2 = event.date
+            diff_minutes = abs((t2 - t1).total_seconds()) / 60
+
+            if diff_minutes <= 1:
+                merged = {
+                    "symbol": base_parsed["symbol"],
+                    "side": base_parsed["side"],
+                    "order_type": base_parsed["order_type"],
+                    "entry": base_parsed["entry"],
+                    "sl": reply_parsed["sl"],
+                    "tp": reply_parsed["tp"],
+                }
+
+                print(f"> Señal combinada desde reply para #{replied.id}")
+                print(">", merged)
+
+                if CONNECT_MT5:
+                    if LIMIT_ONLY:
+                        send_order_limit_only(merged, signal_id=replied.id)
+                    else:
+                        send_order(merged, signal_id=replied.id)
+                return
 
     # Señales normales
     parsed = parse_signal(text)
@@ -229,9 +271,9 @@ def delete_pending_by_signal_id(signal_id):
 
         result = mt5.order_send(request)
         if result.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"✅ Pending eliminada | ticket {o.ticket}")
+            print(f"✅ Pending eliminada")
         else:
-            print(f"❌ Error eliminando {o.ticket}", result)
+            print(f"❌ Error eliminando", result)
 
 # ───────────────────────────────
 # Close pending por signal_id
@@ -272,11 +314,12 @@ def close_position_by_signal_id(signal_id):
 
         result = mt5.order_send(request)
         if result.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"✅ Posición cerrada | ticket {p.ticket}")
+            print(f"✅ Posición cerrada")
         else:
-            print(f"❌ Error cerrando {p.ticket}", result)
-            # Medida preventiva por si reducir el SL falla
-            close_position_by_signal_id(signal_id)
+            print(f"❌ Error cerrando", result)
+            if result.recode != mt5.TRADE_RETCODE_NO_CHANGES:
+                # Medida preventiva por si reducir el SL falla
+                close_position_by_signal_id(signal_id)
 
 # ───────────────────────────────
 # Mover SL a un factor de riesgo
@@ -316,9 +359,9 @@ def reduce_sl_by_factor_by_signal_id(signal_id, factor):
 
         result = mt5.order_send(request)
         if result.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"✅ SL movido a la mitad | ticket {p.ticket}")
+            print(f"✅ SL movido al {factor * 100}%")
         else:
-            print(f"❌ Error moviendo SL {p.ticket}", result)
+            print(f"❌ Error moviendo SL", result)
 
 # ───────────────────────────────
 # Mover SL to BE por signal_id
@@ -349,11 +392,12 @@ def move_sl_to_be_by_signal_id(signal_id):
 
         result = mt5.order_send(request)
         if result.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"✅ SL movido a BE | ticket {p.ticket}")
+            print(f"✅ SL movido a BE")
         else:
-            print(f"❌ Error moviendo SL {p.ticket}", result)
-            # Medida preventiva por si el BE falla
-            reduce_sl_by_factor_by_signal_id(signal_id, 0.2)
+            print(f"❌ Error moviendo SL", result)
+            if result.recode != mt5.TRADE_RETCODE_NO_CHANGES:
+                # Medida preventiva por si el BE falla
+                reduce_sl_by_factor_by_signal_id(signal_id, 0.3)
 
 # ───────────────────────────────
 # Mover SL to original entry
@@ -374,6 +418,10 @@ def move_sl_to_original_entry(signal):
         parsed = parse_signal(text)
         entry = parsed["entry"]
 
+        if (p.sl == entry):
+            print("No hay cambios")
+            return
+
         request = {
             "action": mt5.TRADE_ACTION_SLTP,
             "position": p.ticket,
@@ -386,11 +434,12 @@ def move_sl_to_original_entry(signal):
 
         result = mt5.order_send(request)
         if result.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"✅ SL movido a entrada original | ticket {p.ticket}")
+            print(f"✅ SL movido a entrada original")
         else:
-            print(f"❌ Error moviendo SL {p.ticket}", result)
-            # Medida preventiva por si no se pudo mover el SL
-            reduce_sl_by_factor_by_signal_id(signal.id, 0.2)
+            print(f"❌ Error moviendo SL", result)
+            if result.recode != mt5.TRADE_RETCODE_NO_CHANGES:
+                # Medida preventiva por si no se pudo mover el SL
+                reduce_sl_by_factor_by_signal_id(signal.id, 0.3)
 
 # ───────────────────────────────
 # Calculo de Lotaje
