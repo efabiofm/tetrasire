@@ -19,6 +19,8 @@ LIMIT_BUFFER = float(os.getenv("LIMIT_BUFFER"))
 LIMIT_ONLY = os.getenv("LIMIT_ONLY") == "True"
 MAGIC = int(os.getenv("MAGIC"))
 MARKET_BUFFER = float(os.getenv("MARKET_BUFFER"))
+MARKET_BUFFER_MAX = float(os.getenv("MARKET_BUFFER_MAX"))
+MARKET_BUFFER_STEP = float(os.getenv("MARKET_BUFFER_STEP"))
 RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
 SESSION_FILE = os.getenv("SESSION_FILE")
 SYMBOL = os.getenv("SYMBOL")
@@ -210,7 +212,13 @@ def send_order(parsed, signal_id):
 # ───────────────────────────────
 # Envío de órdenes (Limit Only)
 # ───────────────────────────────
-def send_order_limit_only(parsed, signal_id):
+def send_order_limit_only(
+    parsed,
+    signal_id,
+    buffer=None,
+    buffer_step=MARKET_BUFFER_STEP,
+    buffer_max=None
+):
     symbol = parsed["symbol"]
     side = parsed["side"]
     sl = parsed["sl"]
@@ -218,22 +226,47 @@ def send_order_limit_only(parsed, signal_id):
     entry = parsed["entry"]
     kind = parsed["order_type"]
 
-    mt5.symbol_select(symbol, True)
-    action = mt5.TRADE_ACTION_PENDING
-    order_type = mt5.ORDER_TYPE_BUY_LIMIT if side == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
-    buffer = LIMIT_BUFFER if kind == "LIMIT" else MARKET_BUFFER
+    # Inicializar buffers según tipo de señal
+    if buffer is None:
+        if kind == "MARKET":
+            buffer = MARKET_BUFFER
+            buffer_max = MARKET_BUFFER_MAX
+        else:  # LIMIT real del trader
+            buffer = 0.0
+            buffer_max = 0.0
 
+    if buffer > buffer_max:
+        print(f"❌ Buffer máximo alcanzado ({buffer_max}). Orden cancelada.")
+        return
+
+    mt5.symbol_select(symbol, True)
+    tick = mt5.symbol_info_tick(symbol)
+
+    action = mt5.TRADE_ACTION_PENDING
+    order_type = (
+        mt5.ORDER_TYPE_BUY_LIMIT
+        if side == "BUY"
+        else mt5.ORDER_TYPE_SELL_LIMIT
+    )
+
+    # Calcular precio con buffer
     if side == "BUY":
         price = entry + buffer
+        # protección: BUY_LIMIT debe estar debajo del Ask
+        if price >= tick.ask:
+            price = tick.ask - mt5.symbol_info(symbol).point
     else:
         price = entry - buffer
+        # protección: SELL_LIMIT debe estar arriba del Bid
+        if price <= tick.bid:
+            price = tick.bid + mt5.symbol_info(symbol).point
 
     lot = calculate_lot(symbol, price, sl, RISK_PERCENT)
     if lot <= 0:
         print("Lote inválido.")
         return
-    
-    expiration_time = int(time.time()) + 3600 # 1 hora
+
+    expiration_time = int(time.time()) + 3600
 
     request = {
         "action": action,
@@ -252,7 +285,17 @@ def send_order_limit_only(parsed, signal_id):
     }
 
     result = mt5.order_send(request)
-    print("Resultado:", result)
+    print(f"Resultado (buffer={buffer}):", result)
+
+    # Retry solo si es Invalid price
+    if result.retcode == mt5.TRADE_RETCODE_INVALID_PRICE:
+        return send_order_limit_only(
+            parsed,
+            signal_id,
+            buffer=buffer + buffer_step,
+            buffer_step=buffer_step,
+            buffer_max=buffer_max
+        )
 
 # ───────────────────────────────
 # Delete pending por signal_id
@@ -405,7 +448,7 @@ def move_sl_to_be_by_signal_id(signal_id):
             print(f"❌ Error moviendo SL", result)
             if result.recode != mt5.TRADE_RETCODE_NO_CHANGES:
                 # Medida preventiva por si el BE falla
-                reduce_sl_by_factor_by_signal_id(signal_id, 0.2)
+                reduce_sl_by_factor_by_signal_id(signal_id, 0.3)
 
 # ───────────────────────────────
 # Mover SL to original entry
@@ -447,7 +490,7 @@ def move_sl_to_original_entry(signal):
             print(f"❌ Error moviendo SL", result)
             if result.recode != mt5.TRADE_RETCODE_NO_CHANGES:
                 # Medida preventiva por si no se pudo mover el SL
-                reduce_sl_by_factor_by_signal_id(signal.id, 0.2)
+                reduce_sl_by_factor_by_signal_id(signal.id, 0.3)
 
 # ───────────────────────────────
 # Calculo de Lotaje
