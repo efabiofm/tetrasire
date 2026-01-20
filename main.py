@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import math
 import unicodedata
 import MetaTrader5 as mt5
 from dotenv import load_dotenv
@@ -18,9 +19,6 @@ CONNECT_MT5 = os.getenv("CONNECT_MT5") == "True"
 LIMIT_BUFFER = float(os.getenv("LIMIT_BUFFER"))
 LIMIT_ONLY = os.getenv("LIMIT_ONLY") == "True"
 MAGIC = int(os.getenv("MAGIC"))
-MARKET_BUFFER = float(os.getenv("MARKET_BUFFER"))
-MARKET_BUFFER_MAX = float(os.getenv("MARKET_BUFFER_MAX"))
-MARKET_BUFFER_STEP = float(os.getenv("MARKET_BUFFER_STEP"))
 RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
 SESSION_FILE = os.getenv("SESSION_FILE")
 SYMBOL = os.getenv("SYMBOL")
@@ -212,32 +210,13 @@ def send_order(parsed, signal_id):
 # ───────────────────────────────
 # Envío de órdenes (Limit Only)
 # ───────────────────────────────
-def send_order_limit_only(
-    parsed,
-    signal_id,
-    buffer=None,
-    buffer_step=MARKET_BUFFER_STEP,
-    buffer_max=None
-):
+def send_order_limit_only(parsed, signal_id):
     symbol = parsed["symbol"]
     side = parsed["side"]
     sl = parsed["sl"]
     tp = parsed["tp"]
     entry = parsed["entry"]
     kind = parsed["order_type"]
-
-    # Inicializar buffers según tipo de señal
-    if buffer is None:
-        if kind == "MARKET":
-            buffer = MARKET_BUFFER
-            buffer_max = MARKET_BUFFER_MAX
-        else:  # LIMIT real del trader
-            buffer = 0.0
-            buffer_max = 0.0
-
-    if buffer > buffer_max:
-        print(f"❌ Buffer máximo alcanzado ({buffer_max}). Orden cancelada.")
-        return
 
     mt5.symbol_select(symbol, True)
     tick = mt5.symbol_info_tick(symbol)
@@ -249,24 +228,26 @@ def send_order_limit_only(
         else mt5.ORDER_TYPE_SELL_LIMIT
     )
 
-    # Calcular precio con buffer
-    if side == "BUY":
-        price = entry + buffer
-        # protección: BUY_LIMIT debe estar debajo del Ask
-        if price >= tick.ask:
-            price = tick.ask - mt5.symbol_info(symbol).point
+    # --- cálculo del precio ---
+    if kind == "MARKET":
+        if side == "BUY":
+            raw_price = (tick.ask + entry) / 2
+            price = math.ceil(raw_price * 10) / 10
+        else:
+            raw_price = (tick.bid + entry) / 2
+            price = math.floor(raw_price * 10) / 10
     else:
-        price = entry - buffer
-        # protección: SELL_LIMIT debe estar arriba del Bid
-        if price <= tick.bid:
-            price = tick.bid + mt5.symbol_info(symbol).point
+        if side == "BUY":
+            price = entry + LIMIT_BUFFER
+        else:
+            price = entry - LIMIT_BUFFER
 
     lot = calculate_lot(symbol, price, sl, RISK_PERCENT)
     if lot <= 0:
         print("Lote inválido.")
         return
 
-    expiration_time = int(time.time()) + 3600
+    expiration_time = int(time.time()) + 3600  # 1 hora
 
     request = {
         "action": action,
@@ -285,17 +266,10 @@ def send_order_limit_only(
     }
 
     result = mt5.order_send(request)
-    print(f"Resultado (buffer={buffer}):", result)
+    print("Resultado:", result)
 
-    # Retry solo si es Invalid price
-    if result.retcode == mt5.TRADE_RETCODE_INVALID_PRICE:
-        return send_order_limit_only(
-            parsed,
-            signal_id,
-            buffer=buffer + buffer_step,
-            buffer_step=buffer_step,
-            buffer_max=buffer_max
-        )
+    if (kind == "MARKET" and result.retcode == mt5.TRADE_RETCODE_INVALID_PRICE):
+        return send_order(parsed, signal_id)
 
 # ───────────────────────────────
 # Delete pending por signal_id
