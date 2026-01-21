@@ -129,6 +129,7 @@ def normalize_text(text):
 
 def parse_signal(message: str):
     text = message.lower()
+    text = normalize_numbers(text)
 
     side = "BUY" if " buy" in text else "SELL" if " sell" in text else None
     order_type = "LIMIT" if "limit" in text else "MARKET"
@@ -513,6 +514,10 @@ def fix_sl_if_invalid(entry: float, sl: float, side: str, max_dist: float = 100.
         return None
 
     return min(valid, key=lambda c: abs(entry - c))
+
+def normalize_numbers(text: str):
+    # elimina separadores de miles: 4,866.450 -> 4866.450
+    return re.sub(r'(?<=\d),(?=\d)', '', text)
 
 # ───────────────────────────────
 # Init
