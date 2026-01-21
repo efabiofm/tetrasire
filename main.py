@@ -12,16 +12,29 @@ from telethon import TelegramClient, events
 # ───────────────────────────────
 load_dotenv()
 
-API_HASH = os.getenv("API_HASH")
-API_ID = int(os.getenv("API_ID"))
-CHAT_ID = os.getenv("CHAT_ID")
-CONNECT_MT5 = os.getenv("CONNECT_MT5") == "True"
-LIMIT_BUFFER = float(os.getenv("LIMIT_BUFFER"))
-LIMIT_ONLY = os.getenv("LIMIT_ONLY") == "True"
-MAGIC = int(os.getenv("MAGIC"))
-RISK_PERCENT = float(os.getenv("RISK_PERCENT"))
-SESSION_FILE = os.getenv("SESSION_FILE")
-SYMBOL = os.getenv("SYMBOL")
+def getenv(name, cast=str, default=None):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        if cast is bool:
+            return value.lower() in ("1", "true", "yes", "on")
+        return cast(value)
+    except Exception:
+        return default
+
+API_HASH        = getenv("API_HASH", str)
+API_ID          = getenv("API_ID", int)
+CHAT_ID         = getenv("CHAT_ID", str, "me")
+CONNECT_MT5     = getenv("CONNECT_MT5", bool, False)
+LIMIT_BUFFER    = getenv("LIMIT_BUFFER", float, 0.0)
+LIMIT_EXPIRE    = getenv("LIMIT_EXPIRE", int, 3600)
+LIMIT_ONLY      = getenv("LIMIT_ONLY", bool, False)
+MAGIC           = getenv("MAGIC", int, 55555)
+RISK_PERCENT    = getenv("RISK_PERCENT", float, 1.0)
+SESSION_FILE    = getenv("SESSION_FILE")
+SL_FACTOR       = getenv("SL_FACTOR", float, 0.5)
+SYMBOL          = getenv("SYMBOL", str, "XAUUSD")
 
 client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
 chats = int(CHAT_ID) if CHAT_ID.lstrip("-").isdigit() else CHAT_ID
@@ -192,7 +205,7 @@ def send_order(parsed, signal_id):
         print("Lote inválido.")
         return
     
-    expiration_time = int(time.time()) + 3600 # 1 hora
+    expiration_time = int(time.time()) + LIMIT_EXPIRE
 
     request = {
         "action": action,
@@ -355,7 +368,7 @@ def close_position_by_signal_id(signal_id):
 # ───────────────────────────────
 # Mover SL a un factor de riesgo
 # ───────────────────────────────
-def reduce_sl_by_factor_by_signal_id(signal_id, factor):
+def reduce_sl_by_factor_by_signal_id(signal_id, factor=SL_FACTOR):
     positions = mt5.positions_get()
     if not positions:
         print("No hay posiciones abiertas.")
@@ -428,7 +441,7 @@ def move_sl_to_be_by_signal_id(signal_id):
             print(f"❌ Error moviendo SL", result)
             if result.recode != mt5.TRADE_RETCODE_NO_CHANGES:
                 # Medida preventiva por si el BE falla
-                reduce_sl_by_factor_by_signal_id(signal_id, 0.3)
+                reduce_sl_by_factor_by_signal_id(signal_id)
 
 # ───────────────────────────────
 # Mover SL to original entry
@@ -470,7 +483,7 @@ def move_sl_to_original_entry(signal):
             print(f"❌ Error moviendo SL", result)
             if result.recode != mt5.TRADE_RETCODE_NO_CHANGES:
                 # Medida preventiva por si no se pudo mover el SL
-                reduce_sl_by_factor_by_signal_id(signal.id, 0.3)
+                reduce_sl_by_factor_by_signal_id(signal.id)
 
 # ───────────────────────────────
 # Calculo de Lotaje
