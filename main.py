@@ -127,16 +127,21 @@ def normalize_text(text):
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     return text.lower()
 
+def normalize_numbers(text: str):
+    # elimina separadores de miles: 4,866.450 -> 4866.450
+    text = re.sub(r'(?<=\d),(?=\d)', '', text)
+    return text
+
 def parse_signal(message: str):
     text = message.lower()
     text = normalize_numbers(text)
 
-    side = "BUY" if " buy" in text else "SELL" if " sell" in text else None
+    side = "BUY" if "buy" in text else "SELL" if "sell" in text else None
     order_type = "LIMIT" if "limit" in text else "MARKET"
 
     entry_match = re.search(r"(?:@)?\s*(\d+(?:\.\d+)?)", text)
-    sl_match = re.search(r"sl\s*@?\s*(\d+(?:\.\d+)?)", text)
-    tp_match = re.search(r"tp\s*@?\s*(\d+(?:\.\d+)?)", text)
+    sl_match    = re.search(r"\bsl\b.*?(\d+(?:\.\d+)?)", text)
+    tp_match    = re.search(r"\btp\b.*?(\d+(?:\.\d+)?)", text)
 
     entry = float(entry_match.group(1)) if entry_match else None
     sl = float(sl_match.group(1)) if sl_match else None
@@ -514,10 +519,6 @@ def fix_sl_if_invalid(entry: float, sl: float, side: str, max_dist: float = 100.
         return None
 
     return min(valid, key=lambda c: abs(entry - c))
-
-def normalize_numbers(text: str):
-    # elimina separadores de miles: 4,866.450 -> 4866.450
-    return re.sub(r'(?<=\d),(?=\d)', '', text)
 
 # ───────────────────────────────
 # Init
