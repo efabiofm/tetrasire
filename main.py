@@ -238,10 +238,10 @@ def send_order_limit_only(parsed, signal_id):
     if kind == "MARKET":
         if side == "BUY":
             raw_price = (tick.ask + entry) / 2
-            price = math.ceil(raw_price * 10) / 10
+            price = math.ceil(raw_price * 100) / 100
         else:
             raw_price = (tick.bid + entry) / 2
-            price = math.floor(raw_price * 10) / 10
+            price = math.floor(raw_price * 100) / 100
     else:
         if side == "BUY":
             price = entry + LIMIT_BUFFER
