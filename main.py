@@ -133,10 +133,10 @@ async def handler(event):
         else:
             send_order(parsed, signal_id=event.id)
 
-@client.on(events.MessageDeleted(chats=chats))
+@client.on(events.MessageDeleted)
 async def handler_deleted(event):
     for msg_id in event.deleted_ids:
-        print(f"> Señal borrada #{msg_id}")
+        print(f"> Mensaje borrado #{msg_id}")
 
         if CONNECT_MT5:
             delete_pending_by_signal_id(msg_id)
