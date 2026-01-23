@@ -133,6 +133,15 @@ async def handler(event):
         else:
             send_order(parsed, signal_id=event.id)
 
+@client.on(events.MessageDeleted(chats=chats))
+async def handler_deleted(event):
+    for msg_id in event.deleted_ids:
+        print(f"> Señal borrada #{msg_id}")
+
+        if CONNECT_MT5:
+            delete_pending_by_signal_id(msg_id)
+            close_position_by_signal_id(msg_id)
+
 # ───────────────────────────────
 # Parsing
 # ───────────────────────────────
@@ -361,9 +370,6 @@ def close_position_by_signal_id(signal_id):
             print(f"✅ Posición cerrada")
         else:
             print(f"❌ Error cerrando", result)
-            if result.recode != mt5.TRADE_RETCODE_NO_CHANGES:
-                # Medida preventiva por si reducir el SL falla
-                close_position_by_signal_id(signal_id)
 
 # ───────────────────────────────
 # Mover SL a un factor de riesgo
